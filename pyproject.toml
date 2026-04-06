@@ -1,0 +1,11 @@
+[project]
+name = "etl-debug-openenv"
+version = "1.1.0"
+description = "Data Pipeline Incident Response OpenEnv"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core>=0.2.0",
+]
+
+[project.scripts]
+server = "server.app:main"

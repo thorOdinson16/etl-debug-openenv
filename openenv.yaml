@@ -1,0 +1,234 @@
+name: pipeline-incident-response-openenv
+version: "1.1.0"
+description: >
+  An OpenEnv-compliant AI agent environment where the agent acts as an on-call
+  data engineer triaging and fixing broken production pipelines under time pressure.
+  Simulates real incidents: type corruption, schema mismatches, silent data loss
+  from wrong joins, and multi-table cascading failures. A task that costs
+  engineering teams hours of manual work every day.
+
+domain: data-engineering
+tags:
+  - openenv
+  - incident-response
+  - data-engineering
+  - sre
+  - etl
+  - tabular
+  - real-world
+  - pipeline-debugging
+
+author: "Pipeline Incident Response OpenEnv Team"
+license: MIT
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+tasks:
+  - id: easy
+    name: "INCIDENT #1044 — Type Chaos"
+    difficulty: easy
+    max_steps: 15
+    description: >
+      A SaaS users table (100 rows) was ingested by a broken CSV parser. Every
+      numeric column is the wrong type; salary has ~20% null values.
+      Agent must: cast user_id/age/salary to correct types, fill salary nulls
+      with the column mean, and preserve all 100 rows.
+    expected_score_range: [0.82, 0.95]
+
+  - id: medium
+    name: "INCIDENT #1891 — Schema Mismatch + Duplicates"
+    difficulty: medium
+    max_steps: 15
+    description: >
+      An orders table was migrated from a legacy Node.js service using camelCase
+      columns (userId, productId). The migration script introduced ~20
+      duplicate rows and left order_amount as a string.
+      Agent must: rename columns to snake_case, remove duplicates,
+      cast order_amount to float64.
+    expected_score_range: [0.68, 0.85]
+
+  - id: hard
+    name: "INCIDENT #2847 — Broken Join + Silent Data Loss"
+    difficulty: hard
+    max_steps: 20
+    description: >
+      Two tables: orders (100 rows, cust_id as string) and customers
+      (85 rows, customer_id as int64). A previous pipeline used INNER JOIN
+      and silently dropped 15 orders. The key columns have different names
+      AND different types. Agent must: detect the key mismatch, cast
+      orders.cust_id to int64, rename or use left_on/right_on, use LEFT JOIN,
+      cast order_total to float64, and produce final_orders with 100 rows.
+    expected_score_range: [0.45, 0.70]
+
+  - id: cascade
+    name: "INCIDENT #3091 — Cascading Pipeline Failure (P1)"
+    difficulty: cascade
+    max_steps: 25
+    description: >
+      Three tables (events → sessions → user_summary) have cascading failures.
+      Root cause: events.event_type has whitespace padding (' click ' not 'click'),
+      causing downstream filter_rows to silently drop valid events.
+      sessions.session_duration is stored as string (SUM crashes),
+      session_id has ~10% nulls, and user_id is float64 causing a type mismatch
+      with users.user_id (int64) that breaks the final LEFT JOIN.
+      Agent must fix failures in dependency order and produce a correct user_summary.
+    expected_score_range: [0.30, 0.60]
+
+# ── API ───────────────────────────────────────────────────────────────────────
+api:
+  endpoints:
+    reset:
+      method: POST
+      path: /reset
+      request_body:
+        task_id:
+          type: string
+          enum: [easy, medium, hard, cascade]
+          default: easy
+        session_id:
+          type: string
+          default: default
+          description: "Unique ID per agent run — enables concurrent evaluations."
+      response: Observation
+
+    step:
+      method: POST
+      path: /step
+      request_body:
+        action:
+          type: Action
+        session_id:
+          type: string
+          default: default
+      response:
+        observation: Observation
+        reward: Reward
+        done: boolean
+        info: object
+
+    state:
+      method: GET
+      path: /state
+      query_params:
+        session_id:
+          type: string
+          default: default
+      response: object
+
+    health:
+      method: GET
+      path: /health
+      response: object
+
+# ── Observation space ─────────────────────────────────────────────────────────
+observation_space:
+  tables_preview:
+    type: dict[str, ObservationTable]
+    description: "Head(5) rows, row count, and columns per table."
+  schema_expected:
+    type: dict[str, dict[str, str]]
+    description: "Target schema: {table: {col: dtype}}."
+  schema_actual:
+    type: dict[str, dict[str, str]]
+    description: "Current schema derived from live DataFrames."
+  detected_issues:
+    type: list[str]
+    description: "Auto-detected problems: nulls, dtype mismatches, duplicates."
+  bug_reports:
+    type: list[str]
+    description: "Noisy hints from the pipeline monitoring system."
+  last_action_result:
+    type: str
+    description: "Result message from the most recent action."
+  step_count:
+    type: int
+    description: "Number of steps used in the current episode."
+  task_description:
+    type: str
+    description: "Plain-language objective for the current task."
+  available_actions:
+    type: list[str]
+    description: "Valid action_type values the agent may use."
+  cost_used:
+    type: float
+    description: "Cumulative action cost consumed so far (budget=20.0)."
+
+# ── Action space ──────────────────────────────────────────────────────────────
+action_space:
+  type: structured
+  action_type:
+    type: enum
+    values:
+      - check_pipeline_health  # full health report for all tables (use first)
+      - inspect_column         # view stats for one column
+      - check_nulls            # report null counts for a table
+      - cast_type              # cast a column to int64/float64/object/datetime
+      - fill_nulls             # fill nulls with constant or mean/median/mode/ffill
+      - drop_duplicates        # remove duplicate rows
+      - rename_column          # rename a column
+      - join_tables            # merge two tables (inner/left/right/outer)
+      - filter_rows            # filter rows by condition (supports isin, strip_eq)
+      - validate_table         # run all checks and report issues
+      - audit_log              # review action history (cost=0)
+      - finish                 # signal completion, triggers grading
+  parameters:
+    type: dict
+    description: "Action-specific keyword arguments (validated by Pydantic)."
+
+# ── Reward function ───────────────────────────────────────────────────────────
+reward_function:
+  type: dense
+  formula: >
+    total = 0.30 × schema_correctness
+           + 0.30 × data_validity
+           + 0.30 × row_integrity
+           - 0.05 × step_penalty
+           - 0.05 × invalid_action_penalty
+           - cost_penalty
+  components:
+    schema_correctness:
+      weight: 0.30
+      description: "Fraction of expected columns with correct dtype."
+    data_validity:
+      weight: 0.30
+      description: "Fraction of expected columns that are null-free and duplicate-free."
+    row_integrity:
+      weight: 0.30
+      description: "How well the agent preserved expected row counts. Penalises over-cleaning."
+    step_penalty:
+      weight: 0.05
+      description: "Graduated penalty for excessive step usage (>40% of max_steps)."
+    invalid_action_penalty:
+      weight: 0.05
+      description: "Penalty proportional to number of failed/invalid actions (×0.15 each)."
+    cost_penalty:
+      weight: variable
+      description: "Penalty when cumulative action cost exceeds budget of 20.0."
+  final_score:
+    description: >
+      Deterministic grader score returned on the terminal step (finish or
+      max_steps). Blends a task-specific rubric score (85%) with a cell-level
+      value match against hidden ground-truth tables (15%).
+
+# ── Infrastructure ────────────────────────────────────────────────────────────
+infrastructure:
+  runtime: python3.11
+  server: uvicorn
+  port: 7860
+  workers: 1
+  resources:
+    vcpu: 2
+    memory_gb: 4
+  docker: true
+  huggingface_space: true
+
+# ── Baseline ──────────────────────────────────────────────────────────────────
+baseline:
+  script: inference.py
+  model: gpt-4o
+  scores:
+    easy:    0.87
+    medium:  0.74
+    hard:    0.52
+    cascade: 0.41
+    average: 0.635
+  runtime_limit_minutes: 20
