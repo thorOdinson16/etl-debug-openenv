@@ -190,7 +190,10 @@ def list_tasks() -> Dict[str, Any]:
 
 
 @app.post("/reset", response_model=ResetResponse)
-def reset(request: ResetRequest) -> ResetResponse:
+def reset(request: ResetRequest = None) -> ResetResponse:
+    if request is None:
+        request = ResetRequest()
+        
     """Reset the environment to the initial state for the given task."""
     valid_tasks = ["easy", "medium", "hard", "cascade"]
     if request.task_id not in valid_tasks:
