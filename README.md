@@ -46,6 +46,8 @@ toys, not multi-step production debugging under budget constraints.
 │   ├── action.py        ← Pydantic Action model
 │   ├── observation.py   ← Pydantic Observation + ObservationTable models
 │   └── reward.py        ← Pydantic Reward + RewardComponents models
+├── server/
+│   └── app.py           ← Entry point for openenv-core multi-mode deployment
 ├── tasks/
 │   ├── __init__.py
 │   ├── task_easy.py     ← Task 1: INCIDENT #1044 — Type Chaos
@@ -56,7 +58,9 @@ toys, not multi-step production debugging under budget constraints.
 ├── Dockerfile           ← Multi-stage Docker build
 ├── inference.py         ← Baseline LLM agent (OpenAI-compatible client)
 ├── openenv.yaml         ← OpenEnv spec metadata
+├── pyproject.toml       ← Python project metadata (openenv-core compatible)
 ├── requirements.txt     ← Pinned Python dependencies
+├── uv.lock              ← Locked dependency graph
 └── validate.py          ← Pre-submission validation script (12 checks)
 ```
 
@@ -206,8 +210,8 @@ dashboards have been wrong for 48 hours.
 
 ```bash
 # 1. Clone and install
-git clone https://github.com/your-org/pipeline-incident-response-openenv
-cd pipeline-incident-response-openenv
+git clone https://github.com/AbhiDS16/etl-debug-openenv
+cd etl-debug-openenv
 pip install -r requirements.txt
 
 # 2. Start the environment server
@@ -244,7 +248,7 @@ python inference.py --task all --env_url http://localhost:7860
 The environment is deployed as a Hugging Face Space. Access the live API at:
 
 ```
-https://your-username-pipeline-incident-openenv.hf.space
+https://abhids16-etl-debug-openenv.hf.space
 ```
 
 ---
@@ -254,7 +258,7 @@ https://your-username-pipeline-incident-openenv.hf.space
 ### `POST /reset`
 
 ```bash
-curl -X POST http://localhost:7860/reset \
+curl -X POST https://abhids16-etl-debug-openenv.hf.space/reset \
   -H "Content-Type: application/json" \
   -d '{"task_id": "cascade", "session_id": "my-run-001"}'
 ```
@@ -263,7 +267,7 @@ curl -X POST http://localhost:7860/reset \
 
 ```bash
 # Get a full pipeline health report (recommended first action)
-curl -X POST http://localhost:7860/step \
+curl -X POST https://abhids16-etl-debug-openenv.hf.space/step \
   -H "Content-Type: application/json" \
   -d '{
     "action": {"action_type": "check_pipeline_health", "parameters": {}},
@@ -271,7 +275,7 @@ curl -X POST http://localhost:7860/step \
   }'
 
 # Cast a column type
-curl -X POST http://localhost:7860/step \
+curl -X POST https://abhids16-etl-debug-openenv.hf.space/step \
   -H "Content-Type: application/json" \
   -d '{
     "action": {"action_type": "cast_type", "parameters": {"table": "sessions", "column": "user_id", "target_type": "int64"}},
@@ -279,7 +283,7 @@ curl -X POST http://localhost:7860/step \
   }'
 
 # Filter to valid event types only (with whitespace stripping)
-curl -X POST http://localhost:7860/step \
+curl -X POST https://abhids16-etl-debug-openenv.hf.space/step \
   -H "Content-Type: application/json" \
   -d '{
     "action": {"action_type": "filter_rows", "parameters": {"table": "events", "column": "event_type", "operator": "isin", "value": ["click", "view", "purchase"]}},
@@ -287,7 +291,7 @@ curl -X POST http://localhost:7860/step \
   }'
 
 # Signal completion
-curl -X POST http://localhost:7860/step \
+curl -X POST https://abhids16-etl-debug-openenv.hf.space/step \
   -H "Content-Type: application/json" \
   -d '{"action": {"action_type": "finish", "parameters": {}}, "session_id": "my-run-001"}'
 ```
@@ -299,7 +303,7 @@ Inspect internal state (for debugging).
 ### `GET /health`
 
 ```bash
-curl http://localhost:7860/health
+curl https://abhids16-etl-debug-openenv.hf.space/health
 # → {"status": "ok", "env": "PipelineIncidentEnv", "active_sessions": 1, ...}
 ```
 
@@ -318,15 +322,15 @@ curl http://localhost:7860/health
 
 ## Baseline Scores
 
-Run with `gpt-4o`, `temperature=0`, `max_tokens=400`:
+Run with `gpt-5.4-mini`, `temperature=0`, `max_completion_tokens=400`:
 
 | Task | Score | Notes |
 |------|-------|-------|
-| `easy` | ~0.87 | Types fixed, nulls filled, rows preserved |
-| `medium` | ~0.74 | Renaming and dedup generally correct |
-| `hard` | ~0.52 | Key mismatch detection is the main hurdle |
-| `cascade` | ~0.41 | Dependency ordering and cascading fixes challenge frontier models |
-| **Average** | **~0.635** | |
+| `easy` | 0.8564 | Types fixed, nulls filled, rows preserved |
+| `medium` | 0.8612 | Renaming and dedup correct |
+| `hard` | 1.0000 | Key mismatch + type fix + LEFT join solved perfectly |
+| `cascade` | 0.9098 | Dependency ordering handled correctly |
+| **Average** | **0.9069** | |
 
 Reproduce with:
 
@@ -335,7 +339,7 @@ python inference.py --task all
 # Results saved → baseline_results.json
 ```
 
-Runtime: < 15 minutes on 2 vCPU / 8 GB RAM.
+Runtime: 72.6s
 
 ---
 
