@@ -34,7 +34,7 @@ TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
 
 client = OpenAI(
-    api_key=API_KEY or "sk-placeholder",
+    api_key=API_KEY,
     base_url=API_BASE_URL,
 )
 
