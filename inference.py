@@ -23,30 +23,17 @@ from typing import Any, Dict, Optional
 
 from openai import OpenAI
 
-# ─── Config ───────────────────────────────────────────────────────────────────
-API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
-MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
-API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
+API_BASE_URL = ""
+MODEL_NAME   = "gpt-4o"
+API_KEY      = ""
+ENV_BASE_URL = "https://abhids16-etl-debug-openenv.hf.space"
 
-if not API_BASE_URL:
-    raise RuntimeError(
-        "API_BASE_URL is not set. "
-        "The validator should inject this — check your submission config."
-    )
-if not API_KEY:
-    raise RuntimeError(
-        "API_KEY (or HF_TOKEN) is not set. "
-        "The validator should inject this — check your submission config."
-    )
+# ─── Config ───────────────────────────────────────────────────────────────────
 
 TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
 
-client = OpenAI(
-    api_key=API_KEY,
-    base_url=API_BASE_URL,
-)
+client = OpenAI = None
 
 try:
     import requests
@@ -276,6 +263,26 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
 
 
 def main():
+    global client, API_BASE_URL, MODEL_NAME, API_KEY, ENV_BASE_URL
+
+    API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
+    MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
+    API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
+    ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
+
+    if not API_BASE_URL:
+        raise RuntimeError(
+            "API_BASE_URL is not set. "
+            "The validator should inject this — check your submission config."
+        )
+    if not API_KEY:
+        raise RuntimeError(
+            "API_KEY (or HF_TOKEN) is not set. "
+            "The validator should inject this — check your submission config."
+        )
+
+    client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
+
     parser = argparse.ArgumentParser(description="Data Pipeline Incident Response OpenEnv — Baseline")
     parser.add_argument("--task", default="all", choices=["easy", "medium", "hard", "cascade", "all"])
     parser.add_argument("--max_steps", type=int, default=MAX_STEPS_DEFAULT)
