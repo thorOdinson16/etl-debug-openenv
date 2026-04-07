@@ -27,14 +27,14 @@ from openai import OpenAI
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
-HF_TOKEN     = os.environ.get("HF_TOKEN", "")
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 
 TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
 
 client = OpenAI(
-    api_key=HF_TOKEN or "sk-placeholder",
+    api_key=API_KEY or "sk-placeholder",
     base_url=API_BASE_URL,
 )
 
