@@ -53,6 +53,8 @@ HEALTHCHECK \
          sys.exit(0 if r.status == 200 else 1)"
 
 # Environment defaults (can be overridden at runtime)
+ENV API_BASE_URL=""
+ENV API_KEY=""
 ENV MODEL_NAME="gpt-4o"
 ENV ENV_BASE_URL="http://localhost:7860"
 

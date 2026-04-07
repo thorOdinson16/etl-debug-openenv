@@ -24,11 +24,21 @@ from typing import Any, Dict, Optional
 from openai import OpenAI
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-
-API_BASE_URL = os.environ["API_BASE_URL"]
+API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
-API_KEY      = os.environ["API_KEY"]
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
 ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
+
+if not API_BASE_URL:
+    raise RuntimeError(
+        "API_BASE_URL is not set. "
+        "The validator should inject this — check your submission config."
+    )
+if not API_KEY:
+    raise RuntimeError(
+        "API_KEY (or HF_TOKEN) is not set. "
+        "The validator should inject this — check your submission config."
+    )
 
 TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
