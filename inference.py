@@ -290,7 +290,6 @@ def main():
     parser.add_argument("--env_url", default=None)
     args = parser.parse_args()
 
-    global ENV_BASE_URL
     if args.env_url:
         ENV_BASE_URL = args.env_url
 
