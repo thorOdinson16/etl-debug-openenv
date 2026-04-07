@@ -33,7 +33,7 @@ ENV_BASE_URL = "https://abhids16-etl-debug-openenv.hf.space"
 TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
 
-client = OpenAI = None
+client = None
 
 try:
     import requests
