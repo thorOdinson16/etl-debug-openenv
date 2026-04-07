@@ -53,10 +53,7 @@ HEALTHCHECK \
          sys.exit(0 if r.status == 200 else 1)"
 
 # Environment defaults (can be overridden at runtime)
-ENV API_BASE_URL="https://api.openai.com/v1"
 ENV MODEL_NAME="gpt-4o"
-ENV HF_TOKEN=""
-ENV API_KEY=""
 ENV ENV_BASE_URL="http://localhost:7860"
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "7860", "--workers", "1", "--log-level", "info"]
