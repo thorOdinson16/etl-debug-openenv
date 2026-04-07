@@ -172,7 +172,9 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
         "session_id": session_id,
         "model": MODEL_NAME,
         "max_steps": max_steps,
-    }))
+    }), file=sys.stderr)
+
+    print(f"[START] task={task_id}", flush=True)
 
     reset_data = env_reset(task_id, session_id)
     obs = reset_data["observation"]
@@ -226,7 +228,12 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
             "result": obs.get("last_action_result", "")[:120],
             "reward": step_reward,
             "done": done,
-        }))
+        }), file=sys.stderr)
+
+        print(
+            f"[STEP] step={step_num} reward={step_reward}",
+            flush=True
+        )
 
         conversation_history.append({"role": "user", "content": user_prompt})
         conversation_history.append({"role": "assistant", "content": raw_action})
@@ -248,7 +255,12 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
         "final_score": final_score,
         "steps_used": len(step_rewards),
         "model": MODEL_NAME,
-    }))
+    }), file=sys.stderr)
+
+    print(
+        f"[END] task={task_id} score={final_score} steps={len(step_rewards)}",
+        flush=True
+    )
 
     return final_score
 
