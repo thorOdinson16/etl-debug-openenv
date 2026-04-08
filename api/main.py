@@ -29,6 +29,7 @@ from app.env import ETLDebugEnv
 from models.action import Action
 from models.observation import Observation
 from models.reward import Reward
+import subprocess, threading
 
 
 # ── App setup ─────────────────────────────────────────────────────────────────
@@ -188,6 +189,17 @@ def list_tasks() -> Dict[str, Any]:
         ]
     }
 
+@app.post("/run")
+def run_inference(task: str = "all", max_steps: int = 15):
+    """Trigger inference.py — called by the validator in Phase 2."""
+    def _run():
+        subprocess.run(
+            ["python", "inference.py", "--task", task, "--max_steps", str(max_steps)],
+            env=os.environ.copy(),
+            cwd="/app",
+        )
+    threading.Thread(target=_run, daemon=True).start()
+    return {"status": "inference started", "task": task}
 
 @app.post("/reset", response_model=ResetResponse)
 def reset(request: ResetRequest = None) -> ResetResponse:

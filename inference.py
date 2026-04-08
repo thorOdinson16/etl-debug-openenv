@@ -29,7 +29,7 @@ from openai import OpenAI
 API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
 API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://localhost:7860")
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 TASKS = ["easy", "medium", "hard", "cascade"]
@@ -353,9 +353,19 @@ def main():
         health.raise_for_status()
         print(f"✓ Environment reachable at {ENV_BASE_URL}", file=sys.stderr)
     except Exception as e:
-        print(f"✗ Cannot reach environment at {ENV_BASE_URL}: {e}", file=sys.stderr)
-        print("  Start it with: uvicorn api.main:app --host 0.0.0.0 --port 7860", file=sys.stderr)
-        sys.exit(1)
+        print(f"⚠ Cannot reach environment at {ENV_BASE_URL}: {e}", file=sys.stderr)
+        print("  Retrying with localhost fallback...", file=sys.stderr)
+        # Try localhost fallback before giving up
+        fallback_url = "http://localhost:7860"
+        if ENV_BASE_URL != fallback_url:
+            global ENV_BASE_URL
+            ENV_BASE_URL = fallback_url
+            try:
+                health = requests.get(f"{ENV_BASE_URL}/health", timeout=10)
+                health.raise_for_status()
+                print(f"✓ Fallback reachable at {ENV_BASE_URL}", file=sys.stderr)
+            except Exception as e2:
+                print(f"✗ Fallback also failed: {e2} — proceeding anyway", file=sys.stderr)
 
     print(f"Model : {MODEL_NAME}", file=sys.stderr)
     print(f"API   : {API_BASE_URL}", file=sys.stderr)
