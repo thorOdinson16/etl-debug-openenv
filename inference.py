@@ -5,7 +5,8 @@ Uses OpenAI-compatible client to run an LLM against all 4 tasks.
 Reads credentials from environment variables:
   - API_BASE_URL   : LLM API endpoint
   - MODEL_NAME     : Model identifier
-  - HF_TOKEN       : Hugging Face / API key
+  - API_KEY        : API key (also checks HF_TOKEN as fallback)
+  - ENV_BASE_URL   : URL of the running environment server
 
 Usage:
   python inference.py
@@ -19,21 +20,22 @@ import os
 import sys
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
 
-API_BASE_URL = ""
-MODEL_NAME   = "gpt-4o"
-API_KEY      = ""
-ENV_BASE_URL = "https://abhids16-etl-debug-openenv.hf.space"
+# ─── Read ALL config from environment at module load time ─────────────────────
+# Never hardcode these — the validator injects them.
+API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
+MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
 
 # ─── Config ───────────────────────────────────────────────────────────────────
-
 TASKS = ["easy", "medium", "hard", "cascade"]
 MAX_STEPS_DEFAULT = 15
 
-client = None
+client: Optional[OpenAI] = None
 
 try:
     import requests
@@ -41,6 +43,8 @@ except ImportError:
     print("ERROR: 'requests' not installed. Run: pip install requests")
     sys.exit(1)
 
+
+# ─── Environment helpers ──────────────────────────────────────────────────────
 
 def env_reset(task_id: str, session_id: str) -> Dict[str, Any]:
     resp = requests.post(
@@ -61,6 +65,31 @@ def env_step(action: Dict[str, Any], session_id: str) -> Dict[str, Any]:
     resp.raise_for_status()
     return resp.json()
 
+
+# ─── Stdout loggers (exact validator format) ──────────────────────────────────
+
+def log_start(task: str, model: str) -> None:
+    print(f"[START] task={task} env=etl-debug-openenv model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+# ─── Prompts ──────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an on-call data engineer responding to a production pipeline incident.
 You have a limited number of steps and a cost budget. Your goal is to triage and fix broken data pipelines.
@@ -141,6 +170,8 @@ def build_user_prompt(obs: Dict[str, Any], step_num: int) -> str:
     return "\n".join(parts)
 
 
+# ─── Action parser ────────────────────────────────────────────────────────────
+
 def parse_action(raw: str) -> Optional[Dict[str, Any]]:
     raw = raw.strip()
     if raw.startswith("```"):
@@ -159,10 +190,12 @@ def parse_action(raw: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ─── Task runner ──────────────────────────────────────────────────────────────
+
 def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = True) -> float:
-    # Use a unique session_id per task run to avoid state pollution
     session_id = f"{task_id}-{uuid.uuid4().hex[:8]}"
 
+    # Debug info to stderr (not parsed by validator)
     print(json.dumps({
         "event": "[START]",
         "task_id": task_id,
@@ -171,14 +204,16 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
         "max_steps": max_steps,
     }), file=sys.stderr)
 
-    print(f"[START] task={task_id}", flush=True)
+    # ✅ Correct stdout format: task= env= model=
+    log_start(task=task_id, model=MODEL_NAME)
 
     reset_data = env_reset(task_id, session_id)
     obs = reset_data["observation"]
 
     conversation_history = []
     final_score = 0.0
-    step_rewards = []
+    step_rewards: List[float] = []
+    last_error: Optional[str] = None
 
     for step_num in range(1, max_steps + 1):
         user_prompt = build_user_prompt(obs, step_num)
@@ -192,29 +227,43 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
                 temperature=0.0,
             )
             raw_action = response.choices[0].message.content.strip()
+            last_error = None
         except Exception as e:
-            print(f"  LLM error at step {step_num}: {e}")
+            last_error = str(e)
+            print(f"  LLM error at step {step_num}: {e}", file=sys.stderr)
             time.sleep(2)
             continue
 
         action_dict = parse_action(raw_action)
         if action_dict is None:
-            print(f"  [Step {step_num}] Failed to parse action, using fallback")
-            first_table = list(obs.get("tables_preview", {}).keys())[0]
+            print(f"  [Step {step_num}] Failed to parse action, using fallback", file=sys.stderr)
+            first_table = list(obs.get("tables_preview", {}).keys())[0] if obs.get("tables_preview") else "unknown"
             action_dict = {"action_type": "validate_table", "parameters": {"table": first_table}}
+
+        done = False
+        step_reward = 0.0
 
         try:
             step_data = env_step(action_dict, session_id)
+            obs = step_data["observation"]
+            reward = step_data["reward"]
+            done = step_data["done"]
+            step_reward = reward.get("total", 0.0)
+            step_rewards.append(step_reward)
         except Exception as e:
-            print(f"  Env error at step {step_num}: {e}")
+            last_error = str(e)
+            print(f"  Env error at step {step_num}: {e}", file=sys.stderr)
+            # ✅ Still emit a STEP line even on env error
+            log_step(
+                step=step_num,
+                action=action_dict.get("action_type", "unknown"),
+                reward=0.0,
+                done=False,
+                error=str(e),
+            )
             break
 
-        obs = step_data["observation"]
-        reward = step_data["reward"]
-        done = step_data["done"]
-        step_reward = reward.get("total", 0.0)
-        step_rewards.append(step_reward)
-
+        # Debug to stderr
         print(json.dumps({
             "event": "[STEP]",
             "task_id": task_id,
@@ -227,9 +276,13 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
             "done": done,
         }), file=sys.stderr)
 
-        print(
-            f"[STEP] step={step_num} reward={step_reward}",
-            flush=True
+        # ✅ Correct stdout format: step= action= reward= done= error=
+        log_step(
+            step=step_num,
+            action=action_dict.get("action_type", "unknown"),
+            reward=step_reward,
+            done=done,
+            error=None,
         )
 
         conversation_history.append({"role": "user", "content": user_prompt})
@@ -238,13 +291,16 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
         if done:
             final_score = reward.get("final_score") or reward.get("total", 0.0)
             break
+
     else:
+        # Max steps reached — call finish
         try:
             finish_data = env_step({"action_type": "finish", "parameters": {}}, session_id)
             final_score = finish_data["reward"].get("final_score") or finish_data["reward"].get("total", 0.0)
         except Exception:
             final_score = step_rewards[-1] if step_rewards else 0.0
 
+    # Debug to stderr
     print(json.dumps({
         "event": "[END]",
         "task_id": task_id,
@@ -254,22 +310,17 @@ def run_task(task_id: str, max_steps: int = MAX_STEPS_DEFAULT, verbose: bool = T
         "model": MODEL_NAME,
     }), file=sys.stderr)
 
-    print(
-        f"[END] task={task_id} score={final_score} steps={len(step_rewards)}",
-        flush=True
-    )
+    # ✅ Correct stdout format: success= steps= score= rewards=
+    success = final_score >= 0.1
+    log_end(success=success, steps=len(step_rewards), score=final_score, rewards=step_rewards)
 
     return final_score
 
 
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
 def main():
-    global client, API_BASE_URL, MODEL_NAME, API_KEY, ENV_BASE_URL
-
-    API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "")
-    MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
-    API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")
-    ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "https://abhids16-etl-debug-openenv.hf.space")
-
+    # Validate that env vars were injected by the validator
     if not API_BASE_URL:
         raise RuntimeError(
             "API_BASE_URL is not set. "
@@ -281,6 +332,8 @@ def main():
             "The validator should inject this — check your submission config."
         )
 
+    # ✅ Initialize client using module-level vars (already read from env)
+    global client
     client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
 
     parser = argparse.ArgumentParser(description="Data Pipeline Incident Response OpenEnv — Baseline")
@@ -291,19 +344,21 @@ def main():
     args = parser.parse_args()
 
     if args.env_url:
+        global ENV_BASE_URL
         ENV_BASE_URL = args.env_url
 
+    # Check env server is reachable
     try:
         health = requests.get(f"{ENV_BASE_URL}/health", timeout=10)
         health.raise_for_status()
-        print(f"✓ Environment reachable at {ENV_BASE_URL}")
+        print(f"✓ Environment reachable at {ENV_BASE_URL}", file=sys.stderr)
     except Exception as e:
-        print(f"✗ Cannot reach environment at {ENV_BASE_URL}: {e}")
-        print("  Start it with: uvicorn api.main:app --host 0.0.0.0 --port 7860")
+        print(f"✗ Cannot reach environment at {ENV_BASE_URL}: {e}", file=sys.stderr)
+        print("  Start it with: uvicorn api.main:app --host 0.0.0.0 --port 7860", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Model : {MODEL_NAME}")
-    print(f"API   : {API_BASE_URL}")
+    print(f"Model : {MODEL_NAME}", file=sys.stderr)
+    print(f"API   : {API_BASE_URL}", file=sys.stderr)
 
     tasks_to_run = TASKS if args.task == "all" else [args.task]
     scores = {}
@@ -316,27 +371,28 @@ def main():
 
     elapsed = time.time() - start_time
 
-    print(f"\n{'='*60}")
-    print("  BASELINE SCORES")
-    print(f"{'='*60}")
+    # Summary to stderr only (not validator-parsed)
+    print(f"\n{'='*60}", file=sys.stderr)
+    print("  BASELINE SCORES", file=sys.stderr)
+    print(f"{'='*60}", file=sys.stderr)
     for task_id, score in scores.items():
         bar = "█" * int(score * 20) + "░" * (20 - int(score * 20))
-        print(f"  {task_id:<8} [{bar}] {score:.4f}")
+        print(f"  {task_id:<8} [{bar}] {score:.4f}", file=sys.stderr)
     if len(scores) > 1:
         avg = sum(scores.values()) / len(scores)
-        print(f"  {'AVERAGE':<8}              {avg:.4f}")
-    print(f"\n  Runtime: {elapsed:.1f}s")
-    print(f"{'='*60}\n")
+        print(f"  {'AVERAGE':<8}              {avg:.4f}", file=sys.stderr)
+    print(f"\n  Runtime: {elapsed:.1f}s", file=sys.stderr)
+    print(f"{'='*60}\n", file=sys.stderr)
 
     results = {
-        "model":          MODEL_NAME,
-        "scores":         scores,
-        "average":        sum(scores.values()) / len(scores) if scores else 0.0,
+        "model":           MODEL_NAME,
+        "scores":          scores,
+        "average":         sum(scores.values()) / len(scores) if scores else 0.0,
         "runtime_seconds": round(elapsed, 1),
     }
     with open("baseline_results.json", "w") as f:
         json.dump(results, f, indent=2)
-    print("Results saved → baseline_results.json")
+    print("Results saved → baseline_results.json", file=sys.stderr)
     return scores
 
 
